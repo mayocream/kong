@@ -1115,6 +1115,7 @@ _M._set_ngx = _set_ngx
 _M.split_port = split_port
 
 
+-- hash route 实现路由表，更高效率查询
 function _M.new(routes)
   if type(routes) ~= "table" then
     return error("expected arg #1 routes to be a table")
@@ -1160,7 +1161,7 @@ function _M.new(routes)
   -- all routes indexed by id
   local routes_by_id = {}
 
-
+  -- LRU cache 内存缓存
   local cache = lrucache.new(MATCH_LRUCACHE_SIZE)
 
 

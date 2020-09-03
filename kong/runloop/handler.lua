@@ -655,6 +655,7 @@ do
     -- instead
     local services_init_cache = {}
     if not kong.core_cache and db.strategy ~= "off" then
+      -- 获取所有的 services
       services_init_cache, err = build_services_init_cache(db)
       if err then
         services_init_cache = {}
@@ -694,6 +695,7 @@ do
         }
 
         i = i + 1
+        -- 储存所有的 route-service
         routes[i] = r
       end
 
@@ -705,6 +707,7 @@ do
       return nil, "could not create router: " .. err
     end
 
+    -- router 实例
     router = new_router
 
     if version then
@@ -962,6 +965,7 @@ return {
 
       local worker_state_update_frequency = kong.configuration.worker_state_update_frequency or 1
 
+      -- 定时重建路由缓存
       if kong.db.strategy ~= "off" then
         timer_every(worker_state_update_frequency, function(premature)
           if premature then

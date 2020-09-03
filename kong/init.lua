@@ -211,6 +211,7 @@ do
 
     for _, shm in ipairs(shms) do
       local dict = ngx.shared[shm]
+      -- 清空共享内存
       if dict then
         dict:flush_all()
         dict:flush_expired(0)
@@ -251,6 +252,8 @@ local function execute_cache_warmup(kong_config)
     return true
   end
 
+  -- 只在一个 worker 上执行操作
+  -- 加载数据库实体到共享内存缓存
   if ngx.worker.id() == 0 then
     local ok, err = cache_warmup.execute(kong_config.db_cache_warmup_entities)
     if not ok then
@@ -418,8 +421,9 @@ end
 
 local Kong = {}
 
-
+-- Master 入口函数
 function Kong.init()
+  -- 初始化共享内存
   reset_kong_shm()
 
   -- special math.randomseed from kong.globalpatches not taking any argument.
@@ -442,6 +446,7 @@ function Kong.init()
 
   kong_global.init_pdk(kong, config, nil) -- nil: latest PDK
 
+  -- 数据库连接相关
   local db = assert(DB.new(config))
   assert(db:init_connector())
 
@@ -484,7 +489,7 @@ function Kong.init()
   assert(db.plugins:load_plugin_schemas(config.loaded_plugins))
 
   if kong.configuration.database == "off" then
-
+    -- DB-less 模式
     local err
     declarative_entities, err, declarative_meta = parse_declarative_config(kong.configuration)
     if not declarative_entities then
@@ -492,6 +497,7 @@ function Kong.init()
     end
 
   else
+    -- DB 模式
     local default_ws = db.workspaces:select_by_name("default")
     kong.default_workspace = default_ws and default_ws.id
 
@@ -500,6 +506,7 @@ function Kong.init()
       error("error building initial plugins: " .. tostring(err))
     end
 
+    -- 初始化路由
     assert(runloop.build_router("init"))
   end
 
@@ -554,6 +561,7 @@ function Kong.init_worker()
   end
   kong.cluster_events = cluster_events
 
+  -- 初始化基于共享内存的 cache
   local cache, err = kong_global.init_cache(kong.configuration, cluster_events, worker_events)
   if not cache then
     stash_init_worker_error("failed to instantiate 'kong.cache' module: " ..
@@ -592,11 +600,13 @@ function Kong.init_worker()
     return
   end
 
+  -- 执行构建缓存操作
   ok, err = execute_cache_warmup(kong.configuration)
   if not ok then
     ngx_log(ngx_ERR, "failed to warm up the DB cache: " .. err)
   end
 
+  -- 初始化 worker 任务
   runloop.init_worker.before()
 
 

@@ -92,6 +92,10 @@ local function cache_warmup_single_entity(dao)
 end
 
 
+-- 加载数据库实体到缓存，以实现更快的访问速度
+-- 在 Worker 初始化阶段运行
+-- 默认加载 service, plugins
+-- 大小受配置 mem_cache_size 影响
 -- Loads entities from the database into the cache, for rapid subsequent
 -- access. This function is intented to be used during worker initialization.
 function cache_warmup.execute(entities)
