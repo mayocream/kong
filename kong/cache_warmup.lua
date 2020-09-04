@@ -44,7 +44,9 @@ end
 local function cache_warmup_single_entity(dao)
   local entity_name = dao.schema.name
 
+  -- 选定储存地方 cache/core_cache
   local cache_store = constants.ENTITY_CACHE_STORE[entity_name]
+  -- cache 全局对象
   local cache = kong[cache_store]
 
   ngx.log(ngx.NOTICE, "Preloading '", entity_name, "' into the ", cache_store, "...")

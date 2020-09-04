@@ -287,6 +287,7 @@ end
 --
 -- /services
 local function get_collection_endpoint(schema, foreign_schema, foreign_field_name, method)
+  -- 没有外键关联
   return not foreign_schema and function(self, db, helpers)
     local next_page_tags = ""
 
@@ -295,6 +296,7 @@ local function get_collection_endpoint(schema, foreign_schema, foreign_field_nam
       next_page_tags = "&tags=" .. (type(args.tags) == "table" and args.tags[1] or args.tags)
     end
 
+    -- 分页获取数据
     local data, _, err_t, offset = page_collection(self, db, schema, method)
     if err_t then
       return handle_error(err_t)
@@ -312,6 +314,7 @@ local function get_collection_endpoint(schema, foreign_schema, foreign_field_nam
       next   = next_page,
     }
 
+    -- 有外键关联
   end or function(self, db, helpers)
     local foreign_entity, _, err_t = select_entity(self, db, foreign_schema)
     if err_t then
@@ -374,11 +377,13 @@ local function post_collection_endpoint(schema, foreign_schema, foreign_field_na
       self.args.post[foreign_field_name] = foreign_schema:extract_pk_values(foreign_entity)
     end
 
+    -- 处理请求，插入数据
     local entity, _, err_t = insert_entity(self, db, schema, method)
     if err_t then
       return handle_error(err_t)
     end
 
+    -- 回调函数
     if post_process then
       entity, _, err_t = post_process(entity)
       if err_t then
@@ -707,6 +712,8 @@ end
 -- /services
 local function generate_collection_endpoints(endpoints, schema, foreign_schema, foreign_field_name)
   local collection_path
+
+  -- 外键关联
   if foreign_schema then
     collection_path = fmt("/%s/:%s/%s", foreign_schema.admin_api_name or
                                         foreign_schema.name,
@@ -716,6 +723,7 @@ local function generate_collection_endpoints(endpoints, schema, foreign_schema, 
                                         schema.name)
 
   else
+    -- 没有外键关联
     collection_path = fmt("/%s", schema.admin_api_name or
                                  schema.name)
   end
@@ -785,6 +793,7 @@ local function generate_entity_endpoints(endpoints, schema, foreign_schema, fore
 end
 
 
+-- 创建基础路由
 -- Generates admin api endpoint functions
 --
 -- Examples:
@@ -800,13 +809,18 @@ end
 -- /services/:services
 -- /services/:services/routes/:routes
 local function generate_endpoints(schema, endpoints)
+  -- list 路由
   -- e.g. /routes
   generate_collection_endpoints(endpoints, schema)
 
+  -- 单体路由
   -- e.g. /routes/:routes
   generate_entity_endpoints(endpoints, schema)
 
+  -- 判断是否有关联对象
+  -- 例如 route 关联 services
   for foreign_field_name, foreign_field in schema:each_field() do
+    -- 外键
     if foreign_field.type == "foreign" and not foreign_field.schema.legacy then
       -- e.g. /routes/:routes/service
       generate_entity_endpoints(endpoints, schema, foreign_field.schema, foreign_field_name, true)

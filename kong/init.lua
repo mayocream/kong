@@ -188,6 +188,7 @@ do
   reset_kong_shm = function()
     local preserved = {}
 
+    -- 保留不清空的部分
     for _, key in ipairs(preserve_keys) do
       preserved[key] = ngx.shared.kong:get(key) -- ignore errors
     end
@@ -507,6 +508,7 @@ function Kong.init()
     end
 
     -- 初始化路由
+    -- 构建路由缓存
     assert(runloop.build_router("init"))
   end
 
