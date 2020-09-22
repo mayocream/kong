@@ -26,7 +26,9 @@ DB.__index = function(self, k)
   return DB[k] or rawget(self, "daos")[k]
 end
 
-
+-- strategy = [postgres|cassandra|off]
+-- strategy 参数默认为空
+-- 自动填充为数据库名称 = [postgres|cassandra|off]
 function DB.new(kong_config, strategy)
   if not kong_config then
     error("missing kong_config", 2)
@@ -49,7 +51,12 @@ function DB.new(kong_config, strategy)
     -- core entities are for now the only source of schemas.
     -- TODO: support schemas from plugins entities as well.
 
+    -- 载入核心 entity，为什么是核心 entity
+    -- 因为还有 plugin 自定义的 entity
+    -- 这些 entity 是 Kong 自身的
     for _, entity_name in ipairs(constants.CORE_ENTITIES) do
+
+      -- 加载 schema（数据结构体）
       local entity_schema = require("kong.db.schema.entities." .. entity_name)
 
       -- validate core entities schema via metaschema
@@ -58,6 +65,8 @@ function DB.new(kong_config, strategy)
         return nil, fmt("schema of entity '%s' is invalid: %s", entity_name,
                         tostring(errors:schema_violation(err_t)))
       end
+
+      -- 加载 entity 对象
       local entity, err = Entity.new(entity_schema)
       if not entity then
         return nil, fmt("schema of entity '%s' is invalid: %s", entity_name,
@@ -107,13 +116,17 @@ function DB.new(kong_config, strategy)
       if not strategy then
         return nil, fmt("no strategy found for schema '%s'", schema.name)
       end
+
+      -- 储存 daos
       daos[schema.name] = DAO.new(self, schema, strategy, errors)
     end
   end
 
   -- we are 200 OK
 
-
+  -- 设置元组 __index 方法
+  -- 访问不存在的对象则先
+  -- DB.xxx 再访问 DB.daos.xxx
   return setmetatable(self, DB)
 end
 

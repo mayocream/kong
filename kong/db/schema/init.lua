@@ -1952,12 +1952,19 @@ local function copy(t, cache)
   if type(t) ~= "table" then
     return t
   end
+
   cache = cache or {}
   if cache[t] then
     return cache[t]
   end
+
+
+  -- 创建一个 table
+  -- 一项一项递归复制过去
+  -- 返回新的 table
   local c = {}
   cache[t] = c
+
   for k, v in pairs(t) do
     local kk = copy(k, cache)
     local vv = copy(v, cache)
@@ -2090,8 +2097,15 @@ function Schema.new(definition, is_subschema)
   end
 
   local self = copy(definition)
+
+  -- 继承 Schema 下定义的一系列操作方法
   setmetatable(self, Schema)
 
+  -- entity 缓存的 cache_key，
+  -- 如果没有这个字段，则默认使用 schema 定义的
+  -- primary_key 来作为 cache_key
+  -- cache_key 是个数组，
+  -- 这里只是分开储存
   if self.cache_key then
     self.cache_key_set = {}
     for _, name in ipairs(self.cache_key) do
@@ -2099,6 +2113,9 @@ function Schema.new(definition, is_subschema)
     end
   end
 
+
+  -- 通过元组 __index 方法调用 Schema:each_field() 方法
+  -- 遍历 schema 的 fields table
   for key, field in self:each_field() do
     -- Also give access to fields by name
     self.fields[key] = field
@@ -2106,6 +2123,8 @@ function Schema.new(definition, is_subschema)
       allow_record_fields_by_name(field)
     end
 
+    -- 如果有外键
+    -- 则加载外键关联的 schema 进来
     if field.type == "foreign" then
       local err
       field.schema, err = get_foreign_schema_for_field(field)

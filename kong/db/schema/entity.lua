@@ -31,13 +31,16 @@ function Entity.new_subschema(schema, key, definition)
 end
 
 
+-- definition 是 schema 结构体
 function Entity.new(definition)
 
+  -- 初始化 Schema 对象
   local self, err = Schema.new(definition)
   if not self then
     return nil, err
   end
 
+  -- 遍历 schema fields
   for name, field in self:each_field() do
     if field.nilable then
       return nil, entity_errors.NO_NILABLE:format(name)
