@@ -189,6 +189,8 @@ local function register_events()
 
     -- invalidate this entity anywhere it is cached if it has a
     -- caching key
+    -- 如果 entity 有 cache_key 则让它失效
+    -- 基本上也只有 entity schema 定义出错的情况下才不会有 cache_key
 
     local cache_key = db[data.schema.name]:cache_key(data.entity)
     local cache_obj = kong[constants.ENTITY_CACHE_STORE[data.schema.name]]
@@ -214,6 +216,7 @@ local function register_events()
 
     -- public worker events propagation
 
+    -- 获取 schema 名字
     local entity_channel           = data.schema.table or data.schema.name
     local entity_operation_channel = fmt("%s:%s", entity_channel,
       data.operation)
@@ -554,6 +557,10 @@ do
 
   -- Given a protocol, return the subsystem that handles it
   local function should_process_route(route)
+    -- 判断当前的 subsystem [http 7层/stream 4层]
+    -- http/grpc 是 http
+    -- tcp/tls 是 stream（默认不启用 stream）
+    -- 判断 route 的协议是否对应 subsystem 的协议
     for _, protocol in ipairs(route.protocols) do
       if SUBSYSTEMS[protocol] == subsystem then
         return true
@@ -574,6 +581,8 @@ do
   end
 
 
+  -- 以 [service.id] = service
+  -- 结构储存到 table 中
   local function build_services_init_cache(db)
     local services_init_cache = {}
 
@@ -590,11 +599,13 @@ do
 
 
   local function get_service_for_route(db, route, services_init_cache)
+    -- route 关联的 service 外键
     local service_pk = route.service
     if not service_pk then
       return nil
     end
 
+    -- 查找缓存 table 里的 service
     local id = service_pk.id
     local service = services_init_cache[id]
     if service then
@@ -605,8 +616,10 @@ do
 
     -- kong.core_cache is available, not in init phase
     if kong.core_cache then
+      -- 通过 mlcache 查询 service
       local cache_key = db.services:cache_key(service_pk.id, nil, nil, nil, nil,
                                               route.ws_id)
+      -- 查询 cache 获取，没有获取到则调用 load_service_from_db 获取
       service, err = kong.core_cache:get(cache_key, TTL_ZERO,
                                     load_service_from_db, service_pk)
 
@@ -615,6 +628,7 @@ do
       -- A new service/route has been inserted while the initial route
       -- was being created, on init (perhaps by a different Kong node).
       -- Load the service individually and update services_init_cache with it
+      -- 直接查询数据库获取 service
       service, err = load_service_from_db(service_pk)
       services_init_cache[id] = service
     end
@@ -647,15 +661,18 @@ do
 
   build_router = function(version)
     local db = kong.db
+    -- table 储存所有的 route-service 数据
     local routes, i = {}, 0
 
     local err
     -- The router is initially created on init phase, where kong.core_cache is
     -- still not ready. For those cases, use a plain Lua table as a cache
     -- instead
+    -- init 阶段 core_cache 还没有初始化完成
+    -- 这里使用 table 储存
     local services_init_cache = {}
     if not kong.core_cache and db.strategy ~= "off" then
-      -- 获取所有的 services
+      -- 获取所有的 services，使用默认的分页参数
       services_init_cache, err = build_services_init_cache(db)
       if err then
         services_init_cache = {}
@@ -670,6 +687,9 @@ do
         return nil, "could not load routes: " .. err
       end
 
+      -- 检查 router 数据是否已经变化
+      -- 通过检查 router hash 是否一致判断
+      -- 如果已经变化则退出函数
       if db.strategy ~= "off" then
         if kong.core_cache and counter > 0 and counter % page_size == 0 then
           local new_version, err = get_router_version()
@@ -683,7 +703,9 @@ do
         end
       end
 
+      -- subsystem 是否支持当前路由的协议
       if should_process_route(route) then
+        -- 获取 route 的 service
         local service, err = get_service_for_route(db, route, services_init_cache)
         if err then
           return nil, err

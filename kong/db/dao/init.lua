@@ -927,19 +927,9 @@ local function generate_foreign_key_methods(schema)
   return methods
 end
 
--- schema 参数是 Entity 对象
---  DB 结构体：  local self   = {
-  --    daos       = daos,       -- each of those has the connector singleton
-  --    strategies = strategies,
-  --    connector  = connector,
-  --    strategy   = strategy,
-  --    errors     = errors,
-  --    infos      = connector:infos(),
-  --    kong_config = kong_config,
-  --  }
+
 function _M.new(db, schema, strategy, errors)
   local fk_methods = generate_foreign_key_methods(schema)
-  -- 继承 DAO 基础方法
   local super      = setmetatable(fk_methods, DAO)
 
   local self = {
@@ -947,12 +937,12 @@ function _M.new(db, schema, strategy, errors)
     schema     = schema,
     strategy   = strategy,
     errors     = errors,
+    -- 默认的分页配置
     pagination = utils.shallow_copy(defaults.pagination),
     super      = super,
   }
 
   if schema.dao then
-    -- 插件自定义的 dao
     local custom_dao = require(schema.dao)
     for name, method in pairs(custom_dao) do
       self[name] = method
@@ -1077,6 +1067,7 @@ function DAO:each(size, options)
     validate_size_type(size)
   end
 
+  -- 获取分页条件，有默认值
   options = get_pagination_options(self, options)
 
   if size ~= nil then
@@ -1462,7 +1453,6 @@ function DAO:post_crud_event(operation, entity, old_entity, options)
 end
 
 
--- key 可能传 entity，table 结构
 function DAO:cache_key(key, arg2, arg3, arg4, arg5, ws_id)
 
   if self.schema.workspaceable then

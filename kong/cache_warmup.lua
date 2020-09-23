@@ -74,8 +74,11 @@ local function cache_warmup_single_entity(dao)
       end
     end
 
+    -- 获取 cache_key
     local cache_key = dao:cache_key(entity)
 
+    -- 调用 mlcache 的 safe_set 方法，
+    -- 内存不足会报错
     local ok, err = cache:safe_set(cache_key, entity)
     if not ok then
       return nil, err

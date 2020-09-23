@@ -4,6 +4,7 @@ local fmt = string.format
 
 local Connector = {
   defaults = {
+    -- 默认分页条件
     pagination = {
       page_size     = 1000,
       max_page_size = 50000,
