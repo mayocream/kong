@@ -367,10 +367,13 @@ local function new_ws_data()
 end
 
 
+-- 建立插件缓存
 function PluginsIterator.new(version)
   if not version then
     error("version must be given", 2)
   end
+
+  -- 加载的插件列表
   loaded_plugins = loaded_plugins or get_loaded_plugins()
 
   local ws_id = workspaces.get_workspace_id() or kong.default_workspace
@@ -380,6 +383,7 @@ function PluginsIterator.new(version)
 
   local counter = 0
   local page_size = kong.db.plugins.pagination.page_size
+  -- 遍历数据库里的插件
   for plugin, err in kong.db.plugins:each(nil, GLOBAL_QUERY_OPTS) do
     if err then
       return nil, err
@@ -404,6 +408,7 @@ function PluginsIterator.new(version)
       end
     end
 
+    -- 判断协议是否符合
     if should_process_plugin(plugin) then
       local name = plugin.name
 

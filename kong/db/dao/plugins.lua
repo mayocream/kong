@@ -142,6 +142,7 @@ function Plugins:check_db_against_config(plugin_set)
 end
 
 
+-- 加载插件 Handler
 local function load_plugin_handler(plugin)
   -- NOTE: no version _G.kong (nor PDK) in plugins main chunk
 
@@ -216,7 +217,7 @@ local function plugin_entity_loader(db)
   end
 end
 
-
+-- 加载插件
 local function load_plugin(self, plugin)
   local db = self.db
 
@@ -224,11 +225,13 @@ local function load_plugin(self, plugin)
     ngx_log(ngx_WARN, "plugin '", plugin, "' has been deprecated")
   end
 
+  -- 加载插件处理函数
   local handler, err = load_plugin_handler(plugin)
   if not handler then
     return nil, err
   end
 
+  -- 加载插件数据结构
   local schema, err = plugin_loader.load_subschema(self.schema, plugin, db.errors)
   if err then
     return nil, err
