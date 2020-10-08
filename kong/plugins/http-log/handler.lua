@@ -76,18 +76,23 @@ local function send_payload(self, conf, payload)
     end
   end
 
+  local headers = {
+    ["Host"] = parsed_url.host,
+    ["Content-Type"] = content_type,
+    ["Content-Length"] = #payload,
+    ["Authorization"] = parsed_url.userinfo and (
+      "Basic " .. encode_base64(parsed_url.userinfo)
+    ),
+  }
+  if conf.header_value then
+    headers[conf.header_name] = conf.header_value
+  end
+
   local res, err = httpc:request({
     method = method,
     path = parsed_url.path,
     query = parsed_url.query,
-    headers = {
-      ["Host"] = parsed_url.host,
-      ["Content-Type"] = content_type,
-      ["Content-Length"] = #payload,
-      ["Authorization"] = parsed_url.userinfo and (
-        "Basic " .. encode_base64(parsed_url.userinfo)
-      ),
-    },
+    headers = headers,
     body = payload,
   })
   if not res then
