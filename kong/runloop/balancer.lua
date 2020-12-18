@@ -51,6 +51,7 @@ local _load_targets_into_memory
 --==============================================================================
 
 
+-- 存放 upstream 负载均衡检查
 -- table holding our balancer objects, indexed by upstream id
 local balancers = {}
 
@@ -195,16 +196,20 @@ local function add_targets(balancer, targets)
 end
 
 
+-- 注入 healthchecker targets 数据
 local function populate_healthchecker(hc, balancer, upstream)
   for weight, addr, host in balancer:addressIter() do
+    -- weight > 0 表示生效
     if weight > 0 then
       local ipaddr = addr.ip
       local port = addr.port
+      -- healthchecker 添加 target
       local ok, err = hc:add_target(ipaddr, port, host.hostname, true,
                                     upstream.host_header)
       if ok then
         -- Get existing health status which may have been initialized
         -- with data from another worker, and apply to the new balancer.
+        -- 从 shm 获取 target 的状态
         local tgt_status = hc:get_target_status(ipaddr, port, host.hostname)
         if tgt_status ~= nil then
           balancer:setAddressStatus(tgt_status, ipaddr, port, host.hostname)
@@ -218,6 +223,7 @@ local function populate_healthchecker(hc, balancer, upstream)
 end
 
 
+-- 创建 upstream balancer
 local create_balancer
 do
   local balancer_types = {
@@ -293,6 +299,7 @@ do
     -- @param hc The healthchecker object
     -- @param balancer The balancer object
     -- @param upstream_id The upstream id
+    -- 注册健康检查回调函数
     local function attach_healthchecker_to_balancer(hc, balancer, upstream_id)
       local hc_callback = function(tgt, event)
         local status
@@ -306,6 +313,7 @@ do
 
         local hostname = tgt.hostname
         local ok, err
+        -- 回调设置 balancer 健康状态
         ok, err = balancer:setAddressStatus(status, tgt.ip, tgt.port, hostname)
 
         local health = status and "healthy" or "unhealthy"
@@ -368,6 +376,7 @@ do
     ----------------------------------------------------------------------------
     -- Create a healthchecker object.
     -- @param upstream An upstream entity table.
+    -- 创建健康检查，默认全部 upstream 都会调用
     create_healthchecker = function(balancer, upstream)
       if not healthcheck then
         healthcheck = require("resty.healthcheck") -- delayed initialization
@@ -399,6 +408,7 @@ do
         ssl_cert, ssl_key = parse_global_cert_and_key()
       end
 
+      -- 创建 healthchecker obj
       local healthchecker, err = healthcheck.new({
         name = assert(upstream.ws_id) .. ":" .. upstream.name,
         shm_name = "kong_healthchecks",
@@ -411,8 +421,11 @@ do
         return nil, err
       end
 
+      -- 注入 healthchecker obj targets 数据
+      -- 从 shm 获取
       populate_healthchecker(healthchecker, balancer, upstream)
 
+      -- 注册健康检查回调函数
       attach_healthchecker_to_balancer(healthchecker, balancer, upstream.id)
 
       balancer:setCallback(ring_balancer_callback)
@@ -447,29 +460,38 @@ do
   -- 'create_balancer' operation.
   -- @param upstream (table) A db.upstreams entity
   -- @return The new balancer object, or nil+error
+  -- 真正创建 balancer upstream 的方法
   local function create_balancer_exclusive(upstream)
+    -- 不设置则为 0
     local health_threshold = upstream.healthchecks and
                               upstream.healthchecks.threshold or nil
 
     local balancer, err = balancer_types[upstream.algorithm].new({
       log_prefix = "upstream:" .. upstream.name,
+      -- 最大位置
       wheelSize = upstream.slots,  -- will be ignored by least-connections
+      -- dns 客户端
       dns = dns_client,
+      -- upstream 健康比例
       healthThreshold = health_threshold,
     })
     if not balancer then
       return nil, "failed creating balancer:" .. err
     end
 
+    -- 获取 upstream 下所有 targets
     local targets, err = fetch_targets(upstream)
     if not targets then
       return nil, "failed fetching targets:" .. err
     end
 
+    -- 给 balancer 添加 target
     add_targets(balancer, targets)
 
+    -- 储存 balancer
     upstream_ids[balancer] = upstream.id
 
+    -- 创建 upstream 的 healthchecker 健康检查
     local ok, err = create_healthchecker(balancer, upstream)
     if not ok then
       log(ERR, "[healthchecks] error creating health checker: ", err)
@@ -496,6 +518,7 @@ do
       return balancers[upstream.id]
     end
 
+    -- 加锁，同一个 worker 只有一个任务在执行
     if creating[upstream.id] then
       local ok = wait(upstream.id)
       if not ok then
@@ -506,6 +529,7 @@ do
 
     creating[upstream.id] = true
 
+    -- 创建 upstream balancer
     local balancer, err = create_balancer_exclusive(upstream)
 
     if kong.configuration.worker_consistency == "eventual" then
@@ -536,6 +560,7 @@ local function load_upstreams_dict_into_memory()
       return nil
     end
 
+    -- upstream 的 name 就是 host
     upstreams_dict[up.ws_id .. ":" .. up.name] = up.id
   end
 
@@ -554,8 +579,10 @@ local opts = { neg_ttl = 10 }
 -- and upstream entity tables as values), or nil+error
 local function get_all_upstreams()
   if kong.configuration.worker_consistency == "eventual" then
+    -- 从缓存获取
     return singletons.core_cache:get("balancer:upstreams", opts, noop)
   end
+  -- 从缓存获取，加上获取不到从数据库获取
   local upstreams_dict, err = singletons.core_cache:get("balancer:upstreams", opts,
                                                         load_upstreams_dict_into_memory)
   if err then
@@ -740,7 +767,9 @@ end
 do
   local worker_state_version
 
+  -- 创建 upstream balancers
   create_balancers = function()
+    -- 获取 upstreams_dict
     local upstreams, err = get_all_upstreams()
     if not upstreams then
       log(CRIT, "failed loading initial list of upstreams: ", err)
@@ -751,8 +780,10 @@ do
     for ws_and_name, id in pairs(upstreams) do
       local name = sub(ws_and_name, (find(ws_and_name, ":", 1, true)))
 
+      -- 获取 upstream 单个数据
       local upstream = get_upstream_by_id(id)
       local ok, err
+      -- 存在则创建 balancer
       if upstream ~= nil then
         ok, err = create_balancer(upstream)
       end
@@ -831,7 +862,9 @@ local function update_balancer_state(premature)
 end
 
 
+-- worker init 阶段执行
 local function init()
+  -- 异步执行
   if kong.configuration.worker_consistency == "eventual" then
     local opts = { neg_ttl = 10 }
     local upstreams_dict, err = singletons.core_cache:get("balancer:upstreams",
@@ -859,6 +892,7 @@ local function init()
     end
   end
 
+  -- 创建 balancer 和 healthchecker
   create_balancers()
 
   if kong.configuration.worker_consistency == "eventual" then

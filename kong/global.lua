@@ -167,9 +167,11 @@ function _GLOBAL.init_worker_events()
   --       It must be required right here, inside the init function
   local worker_events = require "resty.worker.events"
 
+  -- 通过共享内存储存事件消息
   local ok, err = worker_events.configure {
     shm = "kong_process_events", -- defined by "lua_shared_dict"
     timeout = 5,            -- life time of event data in shm
+    -- 每秒拉取一次
     interval = 1,           -- poll interval (seconds)
 
     wait_interval = 0.010,  -- wait before retry fetching event data
@@ -183,9 +185,11 @@ function _GLOBAL.init_worker_events()
 end
 
 
+-- 集群事件 通过数据库共享事件消息
 function _GLOBAL.init_cluster_events(kong_config, db)
   return kong_cluster_events.new({
     db            = db,
+    -- 默认每 5 秒拉取一次
     poll_interval = kong_config.db_update_frequency,
     poll_offset   = kong_config.db_update_propagation,
     poll_delay    = kong_config.db_update_propagation,
@@ -207,6 +211,7 @@ function _GLOBAL.init_cache(kong_config, cluster_events, worker_events)
     shm_name          = "kong_db_cache",
     cluster_events    = cluster_events,
     worker_events     = worker_events,
+    -- 默认 0 永不过期
     ttl               = db_cache_ttl,
     neg_ttl           = db_cache_neg_ttl or db_cache_ttl,
     resurrect_ttl     = kong_config.resurrect_ttl,

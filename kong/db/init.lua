@@ -172,11 +172,13 @@ function DB:init_connector()
 end
 
 
+-- init worker 阶段执行
 function DB:init_worker()
   -- Can be used to implement e.g. a timer jobs to
   -- clean expired records from database in case the
   -- database doesn't natively support TTL, such as
   -- PostgreSQL
+  -- 执行 TTL 清理操作
   local ok, err = self.connector:init_worker(self.strategies)
   if not ok then
     return nil, prefix_err(self, err)

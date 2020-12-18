@@ -511,6 +511,8 @@ function Kong.init_worker()
   -- init DB
 
 
+  -- Worker 数据库初始化阶段
+  -- 清理数据库 TTL, 并设置 timer 定时清理数据库
   local ok, err = kong.db:init_worker()
   if not ok then
     stash_init_worker_error("failed to instantiate 'kong.db' module: " .. err)
@@ -530,6 +532,7 @@ function Kong.init_worker()
     end
   end
 
+  -- 初始化 Worker 级别事件
   local worker_events, err = kong_global.init_worker_events()
   if not worker_events then
     stash_init_worker_error("failed to instantiate 'kong.worker_events' " ..
@@ -569,6 +572,7 @@ function Kong.init_worker()
     return
   end
 
+  -- 全局单例
   -- LEGACY
   singletons.cache          = cache
   singletons.core_cache     = core_cache

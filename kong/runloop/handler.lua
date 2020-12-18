@@ -82,6 +82,7 @@ local _set_router
 local _set_router_version
 
 
+-- 统计 LUA VM 内存占用
 local update_lua_mem
 do
   local pid = ngx.worker.pid
@@ -95,6 +96,7 @@ do
   update_lua_mem = function(force)
     local time = ngx.time()
 
+    -- 如果 force, 或者本次执行与上次执行相差 10 秒以上
     if force or time - last >= LUA_MEM_SAMPLE_RATE then
       local count = collectgarbage("count")
 
@@ -170,6 +172,7 @@ local function csv(s)
 end
 
 
+-- 注册集群事件
 local function register_events()
   -- initialize local local_events hooks
   local db             = kong.db
@@ -181,6 +184,7 @@ local function register_events()
   -- events dispatcher
 
 
+  -- 注册事件 callback
   worker_events.register(function(data)
     if not data.schema then
       log(ERR, "[events] missing schema in crud subscriber")
@@ -200,6 +204,7 @@ local function register_events()
     local cache_key = db[data.schema.name]:cache_key(data.entity)
     local cache_obj = kong[constants.ENTITY_CACHE_STORE[data.schema.name]]
 
+    -- 从缓存中删除
     if cache_key then
       cache_obj:invalidate(cache_key)
     end
@@ -222,11 +227,14 @@ local function register_events()
     -- public worker events propagation
 
     -- 获取 schema 名字
+    -- entity 的表名
     local entity_channel           = data.schema.table or data.schema.name
+    -- 操作事件，例如 routes:update
     local entity_operation_channel = fmt("%s:%s", entity_channel,
       data.operation)
 
     -- crud:routes
+    -- 触发本 Worker 的 crud 事件
     local ok, err = worker_events.post_local("crud", entity_channel, data)
     if not ok then
       log(ERR, "[events] could not broadcast crud event: ", err)
@@ -234,23 +242,29 @@ local function register_events()
     end
 
     -- crud:routes:create
+    -- 触发本 Worker 的 crud 事件
     ok, err = worker_events.post_local("crud", entity_operation_channel, data)
     if not ok then
       log(ERR, "[events] could not broadcast crud event: ", err)
       return
     end
+    -- 注册 "dao:crud" source 的事件
+    -- dao:crud 是通过 API 操作触发的事件
   end, "dao:crud")
 
 
   -- local events (same worker)
 
 
+  -- routes 更新, 触发 router 缓存失效
   worker_events.register(function()
     log(DEBUG, "[events] Route updated, invalidating router")
     core_cache:invalidate("router:version")
+    -- 注册 "crud" source, event 为 routes 的事件
   end, "crud", "routes")
 
 
+  -- data 是处理 post 提交的数据
   worker_events.register(function(data)
     if data.operation ~= "create" and
       data.operation ~= "delete"
@@ -259,12 +273,15 @@ local function register_events()
       -- since no Route is pointing to that Service yet.
       -- ditto for deletion: if a Service if being deleted, it is
       -- only allowed because no Route is pointing to it anymore.
+      -- service 更新会触发路由重建
       log(DEBUG, "[events] Service updated, invalidating router")
       core_cache:invalidate("router:version")
     end
+    -- 这里也可以写成 "services:update"
   end, "crud", "services")
 
 
+  -- 重建插件缓存, 如果插件有任何操作
   worker_events.register(function(data)
     log(DEBUG, "[events] Plugin updated, invalidating plugins iterator")
     core_cache:invalidate("plugins_iterator:version")
@@ -315,6 +332,7 @@ local function register_events()
     local operation = data.operation
     local target = data.entity
     -- => to worker_events node handler
+    -- 触发 balancer targets 事件
     local ok, err = worker_events.post("balancer", "targets", {
         operation = data.operation,
         entity = data.entity,
@@ -324,7 +342,9 @@ local function register_events()
         operation, " to workers: ", err)
     end
     -- => to cluster_events handler
+    -- key: 例如 update:<upstream_id>
     local key = fmt("%s:%s", operation, target.upstream.id)
+    -- 触发集群事件 balancer targets
     ok, err = cluster_events:broadcast("balancer:targets", key)
     if not ok then
       log(ERR, "failed broadcasting target ", operation, " to cluster: ", err)
@@ -333,17 +353,21 @@ local function register_events()
 
 
   -- worker_events node handler
+  -- 处理 balancer targets 事件
   worker_events.register(function(data)
     local operation = data.operation
     local target = data.entity
 
     -- => to balancer update
+    -- 触发 balancer 事件
     balancer.on_target_event(operation, target)
   end, "balancer", "targets")
 
 
   -- cluster_events handler
+  -- 订阅集群下 balancer:targets 事件
   cluster_events:subscribe("balancer:targets", function(data)
+    -- 操作符, <upstream_id>
     local operation, key = unpack(utils.split(data, ":"))
     local entity
     if key ~= "all" then
@@ -354,6 +378,7 @@ local function register_events()
       entity = "all"
     end
     -- => to worker_events node handler
+    -- 触发本地 Worker 的 balancer targets 事件
     local ok, err = worker_events.post("balancer", "targets", {
         operation = operation,
         entity = entity
@@ -969,6 +994,7 @@ return {
   _get_updated_router = get_updated_router,
   _update_lua_mem = update_lua_mem,
 
+  -- 初始化 Worker
   init_worker = {
     before = function()
       if kong.configuration.host_ports then
@@ -982,11 +1008,15 @@ return {
         reports.init_worker()
       end
 
+      -- 统计 Lua 内存占用
       update_lua_mem(true)
 
+      -- 注册集群事件
       register_events()
 
 
+      -- 初始化 balancer health checkers
+      -- 初始化中唯一操作 upstreams 和 targets 的地方
       -- initialize balancers for active healthchecks
       timer_at(0, function()
         balancer.init()
@@ -1492,6 +1522,7 @@ return {
     after = function(ctx)
       update_lua_mem()
 
+      -- 如果开启匿名上报，会每条请求都记录
       if kong.configuration.anonymous_reports then
         reports.log(ctx)
       end
@@ -1500,6 +1531,7 @@ return {
         return
       end
 
+      -- 向 upstream 上报调用情况
       -- If response was produced by an upstream (ie, not by a Kong plugin)
       -- Report HTTP status for health checks
       local balancer_data = ctx.balancer_data

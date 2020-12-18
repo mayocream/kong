@@ -19,6 +19,7 @@ Max memory limit: 500 MiBs
 LRU size must be: (500 * 2^20) / 1024 = 512000
 Floored: 500.000 items should be a good default
 --]]
+-- 默认 L1 储存大小
 local LRU_SIZE = 5e5
 
 
@@ -110,6 +111,7 @@ local _M = {}
 local mt = { __index = _M }
 
 
+-- 创建 cache 块
 function _M.new(opts)
   if type(opts.shm_name) ~= "string" then
     error("opts.shm_name must be a string", 2)
@@ -163,12 +165,14 @@ function _M.new(opts)
       log(ERR, "shared dictionary ", shm_miss_name, " not found")
     end
 
+    -- 啊这，L3 Cache，全部加载到内存
     if ngx.shared[shm_name] then
       local mlcache, err = resty_mlcache.new(shm_name, shm_name, {
         shm_miss         = shm_miss_name,
         shm_locks        = "kong_locks",
         shm_set_retries  = 3,
         lru_size         = LRU_SIZE,
+        -- 默认 3600 秒 TTL
         ttl              = max(opts.ttl     or 3600, 0),
         neg_ttl          = max(opts.neg_ttl or 300,  0),
         resurrect_ttl    = opts.resurrect_ttl or 30,
@@ -212,6 +216,7 @@ function _M.new(opts)
     curr_mlcache      = curr_mlcache,
   }
 
+  -- 订阅清理 cache 的事件
   local ok, err = self.cluster_events:subscribe("invalidations", function(key)
     log(DEBUG, "received invalidate event from cluster for key: '", key, "'")
     self:invalidate_local(key)

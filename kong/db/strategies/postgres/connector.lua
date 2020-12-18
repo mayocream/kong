@@ -296,6 +296,7 @@ function _mt:init()
 end
 
 
+-- init worker 阶段执行清理 TTL 操作
 function _mt:init_worker(strategies)
   if ngx.worker.id() == 0 then
     local graph = tsort.new()
@@ -335,6 +336,7 @@ function _mt:init_worker(strategies)
 
     local cleanup_statement = concat(cleanup_statements, "\n")
 
+    -- 定时删库
     return timer_every(60, function(premature)
       if premature then
         return
