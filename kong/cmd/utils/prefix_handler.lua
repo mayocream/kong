@@ -103,6 +103,23 @@ local function gen_default_ssl_cert(kong_config, target)
   return true
 end
 
+
+local function gen_trusted_certs_combined_file(combined_filepath, paths)
+
+  log.verbose("generating trusted certs combined file in ",
+              combined_filepath)
+
+  local fd = assert(io.open(combined_filepath, "w"))
+
+  for _, path in ipairs(paths) do
+    fd:write(pl_file.read(path))
+    fd:write("\n")
+  end
+
+  io.close(fd)
+end
+
+
 local function get_ulimit()
   local ok, _, stdout, stderr = pl_utils.executeex "ulimit -n"
   if not ok then
@@ -187,6 +204,8 @@ local function compile_conf(kong_config, conf_template)
 end
 
 local function write_env_file(path, data)
+  os.remove(path)
+
   local c = require "lua_system_constants"
 
   local flags = bit.bor(c.O_CREAT(), c.O_WRONLY())
@@ -199,18 +218,24 @@ local function write_env_file(path, data)
                 ffi.string(ffi.C.strerror(errno)) .. ")"
   end
 
-  local n  = #data
-  local sz = ffi.C.write(fd, data, n)
-  if sz ~= n then
-    ffi.C.close(fd)
-    return nil, "wrote " .. sz .. " bytes, expected to write " .. n
-  end
-
   local ok = ffi.C.close(fd)
   if ok ~= 0 then
     local errno = ffi.errno()
     return nil, "failed to close fd (" ..
                 ffi.string(ffi.C.strerror(errno)) .. ")"
+  end
+
+  local file, err = io.open(path, "w+")
+  if not file then
+    return nil, "unable to open env path " .. path .. " (" .. err .. ")"
+  end
+
+  local ok, err = file:write(data)
+
+  file:close()
+
+  if not ok then
+    return nil, "unable to write env path " .. path .. " (" .. err .. ")"
   end
 
   return true
@@ -304,6 +329,13 @@ local function prepare_prefix(kong_config, nginx_custom_template_path)
     kong_config.status_ssl_cert_key = kong_config.status_ssl_cert_key_default
   end
 
+  if kong_config.lua_ssl_trusted_certificate_combined then
+    gen_trusted_certs_combined_file(
+      kong_config.lua_ssl_trusted_certificate_combined,
+      kong_config.lua_ssl_trusted_certificate
+    )
+  end
+
   -- check ulimit
   local ulimit, err = get_ulimit()
   if not ulimit then return nil, err
@@ -390,5 +422,6 @@ return {
   compile_kong_conf = compile_kong_conf,
   compile_kong_stream_conf = compile_kong_stream_conf,
   compile_nginx_conf = compile_nginx_conf,
-  gen_default_ssl_cert = gen_default_ssl_cert
+  gen_default_ssl_cert = gen_default_ssl_cert,
+  write_env_file = write_env_file,
 }

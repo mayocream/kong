@@ -20,22 +20,27 @@ app.handle_404 = api_helpers.handle_404
 app.handle_error = api_helpers.handle_error
 app:before_filter(api_helpers.before_filter)
 
--- 执行 pre hook
+
 assert(hooks.run_hook("api:init:pre", app))
 
 
 ngx.log(ngx.DEBUG, "Loading Admin API endpoints")
 
 
--- 加载固定路由
 -- Load core routes
-for _, v in ipairs({"kong", "health", "cache", "config", "clustering"}) do
+for _, v in ipairs({"kong", "health", "cache", "config", }) do
   local routes = require("kong.api.routes." .. v)
   api_helpers.attach_routes(app, routes)
 end
 
 
--- 动态绑定加载路由
+-- Load custom DB routes
+for _, v in ipairs({"clustering", }) do
+  local routes = require("kong.api.routes." .. v)
+  api_helpers.attach_new_db_routes(app, routes)
+end
+
+
 do
   -- This function takes the auto-generated routes and then customizes them
   -- based on custom_endpoints. It will add one argument to actual function

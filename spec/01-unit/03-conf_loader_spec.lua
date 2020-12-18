@@ -1,6 +1,27 @@
 local conf_loader = require "kong.conf_loader"
+local utils = require "kong.tools.utils"
 local helpers = require "spec.helpers"
 local tablex = require "pl.tablex"
+local pl_path = require "pl.path"
+local ffi = require "ffi"
+
+
+local C = ffi.C
+
+
+ffi.cdef([[
+  struct group *getgrnam(const char *name);
+  struct passwd *getpwnam(const char *name);
+]])
+
+
+local function kong_user_group_exists()
+  if C.getpwnam("kong") == nil or C.getgrnam("kong") == nil then
+    return false
+  else
+    return true
+  end
+end
 
 
 local function search_directive(tbl, directive_name, directive_value)
@@ -19,7 +40,11 @@ describe("Configuration loader", function()
   it("loads the defaults", function()
     local conf = assert(conf_loader())
     assert.is_string(conf.lua_package_path)
-    assert.is_nil(conf.nginx_main_user)
+    if kong_user_group_exists() == true then
+      assert.equal("kong kong", conf.nginx_main_user)
+    else
+      assert.is_nil(conf.nginx_main_user)
+    end
     assert.equal("auto", conf.nginx_main_worker_processes)
     assert.same({"127.0.0.1:8001 reuseport backlog=16384", "127.0.0.1:8444 http2 ssl reuseport backlog=16384"}, conf.admin_listen)
     assert.same({"0.0.0.0:8000 reuseport backlog=16384", "0.0.0.0:8443 http2 ssl reuseport backlog=16384"}, conf.proxy_listen)
@@ -34,7 +59,11 @@ describe("Configuration loader", function()
     -- defaults
     assert.equal("on", conf.nginx_main_daemon)
     -- overrides
-    assert.is_nil(conf.nginx_main_user)
+    if kong_user_group_exists() == true then
+      assert.equal("kong kong", conf.nginx_main_user)
+    else
+      assert.is_nil(conf.nginx_main_user)
+    end
     assert.equal("1", conf.nginx_main_worker_processes)
     assert.same({"127.0.0.1:9001"}, conf.admin_listen)
     assert.same({"0.0.0.0:9000", "0.0.0.0:9443 http2 ssl",
@@ -53,7 +82,11 @@ describe("Configuration loader", function()
     -- defaults
     assert.equal("on", conf.nginx_main_daemon)
     -- overrides
-    assert.is_nil(conf.nginx_main_user)
+    if kong_user_group_exists() == true then
+      assert.equal("kong kong", conf.nginx_main_user)
+    else
+      assert.is_nil(conf.nginx_main_user)
+    end
     assert.equal("auto", conf.nginx_main_worker_processes)
     assert.same({"127.0.0.1:9001"}, conf.admin_listen)
     assert.same({"0.0.0.0:9000", "0.0.0.0:9443 http2 ssl",
@@ -400,9 +433,13 @@ describe("Configuration loader", function()
   end)
 
   describe("nginx_main_user", function()
-    it("is nil by default", function()
+    it("is 'kong kong' by default if the kong user/group exist", function()
       local conf = assert(conf_loader(helpers.test_conf_path))
-      assert.is_nil(conf.nginx_main_user)
+      if kong_user_group_exists() == true then
+        assert.equal("kong kong", conf.nginx_main_user)
+      else
+        assert.is_nil(conf.nginx_main_user)
+      end
     end)
     it("is nil when 'nobody'", function()
       local conf = assert(conf_loader(helpers.test_conf_path, {
@@ -425,6 +462,15 @@ describe("Configuration loader", function()
   end)
 
   describe("nginx_user", function()
+    it("is 'kong kong' by default if the kong user/group exist", function()
+      local conf = assert(conf_loader(helpers.test_conf_path))
+      if kong_user_group_exists() == true then
+        assert.equal("kong kong", conf.nginx_user)
+      else
+        assert.is_nil(conf.nginx_user)
+      end
+    end)
+
     it("is nil when 'nobody'", function()
       local conf = assert(conf_loader(helpers.test_conf_path, {
         nginx_user = "nobody"
@@ -741,6 +787,41 @@ describe("Configuration loader", function()
           assert.contains("lua_ssl_trusted_certificate: no such file at /path/cert.pem", errors)
           assert.is_nil(conf)
         end)
+        it("accepts several CA certs in lua_ssl_trusted_certificate, setting lua_ssl_trusted_certificate_combined", function()
+          local conf, _, errors = conf_loader(nil, {
+            lua_ssl_trusted_certificate = "spec/fixtures/kong_spec.crt,spec/fixtures/kong_clustering.crt",
+          })
+          assert.is_nil(errors)
+          assert.same({
+            pl_path.abspath("spec/fixtures/kong_spec.crt"),
+            pl_path.abspath("spec/fixtures/kong_clustering.crt"),
+          }, conf.lua_ssl_trusted_certificate)
+          assert.matches(".ca_combined", conf.lua_ssl_trusted_certificate_combined)
+        end)
+        it("expands the `system` property in lua_ssl_trusted_certificate", function()
+          local old_gstcf = utils.get_system_trusted_certs_filepath
+          local old_exists = pl_path.exists
+          finally(function()
+            utils.get_system_trusted_certs_filepath = old_gstcf
+            pl_path.exists = old_exists
+          end)
+          local system_path = "spec/fixtures/kong_spec.crt"
+          utils.get_system_trusted_certs_filepath = function()
+            return system_path
+          end
+          pl_path.exists = function(path)
+            return path == system_path or old_exists(path)
+          end
+
+          local conf, _, errors = conf_loader(nil, {
+            lua_ssl_trusted_certificate = "system",
+          })
+          assert.is_nil(errors)
+          assert.same({
+            pl_path.abspath(system_path),
+          }, conf.lua_ssl_trusted_certificate)
+          assert.matches(".ca_combined", conf.lua_ssl_trusted_certificate_combined)
+        end)
         it("resolves SSL cert/key to absolute path", function()
           local conf, err = conf_loader(nil, {
             ssl_cert = "spec/fixtures/kong_spec.crt",
@@ -1006,6 +1087,28 @@ describe("Configuration loader", function()
       })
       assert.equal(conf.worker_state_update_frequency, 0.01)
       assert.is_nil(err)
+    end)
+  end)
+
+  describe("clustering properties", function()
+    it("cluster_data_plane_purge_delay is accepted", function()
+      local conf = assert(conf_loader(nil, {
+        cluster_data_plane_purge_delay = 100,
+      }))
+      assert.equal(100, conf.cluster_data_plane_purge_delay)
+
+      conf = assert(conf_loader(nil, {
+        cluster_data_plane_purge_delay = 60,
+      }))
+      assert.equal(60, conf.cluster_data_plane_purge_delay)
+    end)
+
+    it("cluster_data_plane_purge_delay < 60 is rejected", function()
+      local conf, err = conf_loader(nil, {
+        cluster_data_plane_purge_delay = 59,
+      })
+      assert.is_nil(conf)
+      assert.equal("cluster_data_plane_purge_delay must be 60 or greater", err)
     end)
   end)
 

@@ -11,11 +11,18 @@ local tablex = require "pl.tablex"
 local utils = require "kong.tools.utils"
 local log = require "kong.cmd.utils.log"
 local env = require "kong.cmd.utils.env"
+local ffi = require "ffi"
 local ip = require "resty.mediador.ip"
 
 
 local fmt = string.format
 local concat = table.concat
+local C = ffi.C
+
+ffi.cdef([[
+  struct group *getgrnam(const char *name);
+  struct passwd *getpwnam(const char *name);
+]])
 
 
 -- Version 5: https://wiki.mozilla.org/Security/Server_Side_TLS
@@ -566,6 +573,7 @@ local CONF_INFERENCES = {
     deprecated = { replacement = false }
   },
 
+  lua_ssl_trusted_certificate = { typ = "array" },
   lua_ssl_verify_depth = { typ = "number" },
   lua_socket_pool_size = { typ = "number" },
 
@@ -576,6 +584,7 @@ local CONF_INFERENCES = {
   cluster_mtls = { enum = { "shared", "pki" } },
   cluster_ca_cert = { typ = "string" },
   cluster_server_name = { typ = "string" },
+  cluster_data_plane_purge_delay = { typ = "number" },
   kic = { typ = "boolean" },
 }
 
@@ -800,11 +809,31 @@ local function check_and_infer(conf, opts)
     end
   end
 
-  if conf.lua_ssl_trusted_certificate and
-     not pl_path.exists(conf.lua_ssl_trusted_certificate)
-  then
-    errors[#errors + 1] = "lua_ssl_trusted_certificate: no such file at " ..
-                        conf.lua_ssl_trusted_certificate
+  if conf.lua_ssl_trusted_certificate then
+    local new_paths = {}
+
+    for i, path in ipairs(conf.lua_ssl_trusted_certificate) do
+      if path == "system" then
+        local system_path, err = utils.get_system_trusted_certs_filepath()
+        if system_path then
+          path = system_path
+
+        else
+          errors[#errors + 1] =
+            "lua_ssl_trusted_certificate: unable to locate system bundle - " ..
+            err
+        end
+      end
+
+      if not pl_path.exists(path) then
+        errors[#errors + 1] = "lua_ssl_trusted_certificate: no such file at " ..
+                               path
+      end
+
+      new_paths[i] = path
+    end
+
+    conf.lua_ssl_trusted_certificate = new_paths
   end
 
   if conf.ssl_cipher_suite ~= "custom" then
@@ -938,6 +967,10 @@ local function check_and_infer(conf, opts)
       errors[#errors + 1] = "only in-memory storage can be used when role = \"data_plane\"\n" ..
                             "Hint: set database = off in your kong.conf"
     end
+  end
+
+  if conf.cluster_data_plane_purge_delay < 60 then
+    errors[#errors + 1] = "cluster_data_plane_purge_delay must be 60 or greater"
   end
 
   if conf.role == "control_plane" or conf.role == "data_plane" then
@@ -1313,16 +1346,32 @@ local function load(path, custom_conf, opts)
 
   conf = tablex.merge(conf, defaults) -- intersection (remove extraneous properties)
 
+  local default_nginx_main_user = false
+  local default_nginx_user = false
+
   do
     -- nginx 'user' directive
     local user = utils.strip(conf.nginx_main_user):gsub("%s+", " ")
     if user == "nobody" or user == "nobody nobody" then
       conf.nginx_main_user = nil
+
+    elseif user == "kong" or user == "kong kong" then
+      default_nginx_main_user = true
     end
 
     local user = utils.strip(conf.nginx_user):gsub("%s+", " ")
     if user == "nobody" or user == "nobody nobody" then
       conf.nginx_user = nil
+
+    elseif user == "kong" or user == "kong kong" then
+      default_nginx_user = true
+    end
+  end
+
+  if C.getpwnam("kong") == nil or C.getgrnam("kong") == nil then
+    if default_nginx_main_user == true and default_nginx_user == true then
+      conf.nginx_user = nil
+      conf.nginx_main_user = nil
     end
   end
 
@@ -1508,9 +1557,13 @@ local function load(path, custom_conf, opts)
     conf.admin_ssl_cert_key = pl_path.abspath(conf.admin_ssl_cert_key)
   end
 
-  if conf.lua_ssl_trusted_certificate then
+  if conf.lua_ssl_trusted_certificate
+     and #conf.lua_ssl_trusted_certificate > 0 then
     conf.lua_ssl_trusted_certificate =
-      pl_path.abspath(conf.lua_ssl_trusted_certificate)
+      tablex.map(pl_path.abspath, conf.lua_ssl_trusted_certificate)
+
+    conf.lua_ssl_trusted_certificate_combined =
+      pl_path.abspath(pl_path.join(conf.prefix, ".ca_combined"))
   end
 
   if conf.cluster_cert and conf.cluster_cert_key then

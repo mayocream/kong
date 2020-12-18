@@ -141,6 +141,14 @@ function Plugins:check_db_against_config(plugin_set)
   return true
 end
 
+local function implements(plugin, method)
+  if type(plugin) ~= "table" then
+    return false
+  end
+
+  local m = plugin[method]
+  return type(m) == "function" and m ~= BasePlugin[method]
+end
 
 -- 加载插件 Handler
 local function load_plugin_handler(plugin)
@@ -156,6 +164,14 @@ local function load_plugin_handler(plugin)
   end
   if not ok then
     return nil, plugin .. " plugin is enabled but not installed;\n" .. handler
+  end
+
+  if implements(handler, "response") and
+      (implements(handler, "header_filter") or implements(handler, "body_filter"))
+  then
+    return nil, fmt(
+      "Plugin %q can't be loaded because it implements both `response` " ..
+      "and `header_filter` or `body_filter` methods.\n", plugin)
   end
 
   return handler
@@ -237,14 +253,18 @@ local function load_plugin(self, plugin)
     return nil, err
   end
 
-  if schema.fields.consumer and schema.fields.consumer.eq == null then
-    plugin.no_consumer = true
-  end
-  if schema.fields.route and schema.fields.route.eq == null then
-    plugin.no_route = true
-  end
-  if schema.fields.service and schema.fields.service.eq == null then
-    plugin.no_service = true
+  for _, field in ipairs(schema.fields) do
+    if field.consumer and field.consumer.eq == null then
+      handler.no_consumer = true
+    end
+
+    if field.route and field.route.eq == null then
+      handler.no_route = true
+    end
+
+    if field.service and field.service.eq == null then
+      handler.no_service = true
+    end
   end
 
   ngx_log(ngx_DEBUG, "Loading plugin: ", plugin)

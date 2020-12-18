@@ -149,13 +149,13 @@ pipeline {
                 BINTRAY_KEY = credentials('bintray_travis_key')
                 AWS_ACCESS_KEY = credentials('AWS_ACCESS_KEY')
                 AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
-                CACHE = false
-                UPDATE_CACHE = true
-                DEBUG = 0
-                RELEASE_DOCKER_ONLY=true
-                PACKAGE_TYPE=apk
-                RESTY_IMAGE_BASE=alpine
-                RESTY_IMAGE_TAG=latest
+                CACHE = "false"
+                UPDATE_CACHE = "true"
+                DEBUG = "0"
+                RELEASE_DOCKER_ONLY="true"
+                PACKAGE_TYPE="apk"
+                RESTY_IMAGE_BASE="alpine"
+                RESTY_IMAGE_TAG="latest"
             }
             steps {
                 sh 'echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin || true'
@@ -315,14 +315,17 @@ pipeline {
                         KONG_BUILD_TOOLS_LOCATION = "${env.WORKSPACE}/../kong-build-tools"
                         BINTRAY_USR = 'kong-inc_travis-ci@kong'
                         BINTRAY_KEY = credentials('bintray_travis_key')
+                        AWS_ACCESS_KEY = credentials('AWS_ACCESS_KEY')
+                        AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
                         DEBUG = 0
                     }
                     steps {
                         sh 'echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin || true'
                         sh 'make setup-kong-build-tools'
                         sh 'PACKAGE_TYPE=src RESTY_IMAGE_BASE=src make release'
-                        sh 'PACKAGE_TYPE=apk RESTY_IMAGE_BASE=alpine RESTY_IMAGE_TAG=3 make release'
                         sh 'PACKAGE_TYPE=rpm RESTY_IMAGE_BASE=amazonlinux RESTY_IMAGE_TAG=1 make release'
+                        sh 'PACKAGE_TYPE=rpm RESTY_IMAGE_BASE=amazonlinux RESTY_IMAGE_TAG=2 make release'
+                        sh 'CACHE=false DOCKER_MACHINE_ARM64_NAME="kong-"`cat /proc/sys/kernel/random/uuid` PACKAGE_TYPE=apk RESTY_IMAGE_BASE=alpine RESTY_IMAGE_TAG=3 make release'
                     }
                 }
             }
@@ -333,6 +336,7 @@ pipeline {
                 allOf {
                     buildingTag()
                     not { triggeredBy 'TimerTrigger' }
+                    not { tag pattern: 'alpha|beta', comparator: "REGEXP" }
                 }
             }
             parallel {
@@ -430,6 +434,7 @@ pipeline {
                         }
                     }
                     environment {
+                        GITHUB_TOKEN = credentials('github_bot_access_token')
                         GITHUB_SSH_KEY = credentials('github_bot_ssh_key')
                         SLACK_WEBHOOK = credentials('core_team_slack_webhook')
                         GITHUB_USER = "mashapedeployment"

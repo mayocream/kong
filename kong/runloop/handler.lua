@@ -18,6 +18,7 @@ local type         = type
 local ipairs       = ipairs
 local tostring     = tostring
 local tonumber     = tonumber
+local setmetatable = setmetatable
 local sub          = string.sub
 local byte         = string.byte
 local gsub         = string.gsub
@@ -37,12 +38,16 @@ local clear_header = ngx.req.clear_header
 local unpack       = unpack
 
 
+local NOOP = function() end
+
+
 local ERR   = ngx.ERR
 local CRIT  = ngx.CRIT
 local WARN  = ngx.WARN
 local DEBUG = ngx.DEBUG
 local COMMA = byte(",")
 local SPACE = byte(" ")
+local ARRAY_MT = require("cjson.safe").array_mt
 
 
 local HOST_PORTS = {}
@@ -824,7 +829,9 @@ do
       host           = host,      -- target host per `service` entity
       port           = port,      -- final target port
       try_count      = 0,         -- retry counter
-      tries          = {},        -- stores info per try
+      -- stores info per try, metatable is needed for basic log serializer
+      -- see #6390
+      tries          = setmetatable({}, ARRAY_MT),
       -- ip          = nil,       -- final target IP address
       -- balancer    = nil,       -- the balancer object, if any
       -- hostname    = nil,       -- hostname of the final target IP
@@ -1056,7 +1063,8 @@ return {
         }
       end
 
-    end
+    end,
+    after = NOOP,
   },
   preread = {
     before = function(ctx)
@@ -1093,7 +1101,8 @@ return {
   certificate = {
     before = function(_)
       certificate.execute()
-    end
+    end,
+    after = NOOP,
   },
   rewrite = {
     before = function(ctx)
@@ -1104,6 +1113,7 @@ return {
       ctx.http_proxy_authorization = var.http_proxy_authorization
       ctx.http_te                  = var.http_te
     end,
+    after = NOOP,
   },
   access = {
     before = function(ctx)
@@ -1139,6 +1149,7 @@ return {
       local forwarded_proto
       local forwarded_host
       local forwarded_port
+      local forwarded_path
       local forwarded_prefix
 
       -- X-Forwarded-* Headers Parsing
@@ -1155,12 +1166,21 @@ return {
         forwarded_proto  = var.http_x_forwarded_proto  or scheme
         forwarded_host   = var.http_x_forwarded_host   or host
         forwarded_port   = var.http_x_forwarded_port   or port
+        forwarded_path   = var.http_x_forwarded_path
         forwarded_prefix = var.http_x_forwarded_prefix
 
       else
         forwarded_proto  = scheme
         forwarded_host   = host
         forwarded_port   = port
+      end
+
+      if not forwarded_path then
+        forwarded_path = var.request_uri
+        local p = find(forwarded_path, "?", 2, true)
+        if p then
+          forwarded_path = sub(forwarded_path, 1, p - 1)
+        end
       end
 
       if not forwarded_prefix and match_t.prefix ~= "/" then
@@ -1212,6 +1232,7 @@ return {
         forwarded_proto ~= "https")
       then
         return kong.response.exit(200, nil, {
+          ["content-type"] = "application/grpc",
           ["grpc-status"] = 1,
           ["grpc-message"] = "gRPC request matched gRPCs route",
         })
@@ -1254,6 +1275,7 @@ return {
       var.upstream_x_forwarded_proto  = forwarded_proto
       var.upstream_x_forwarded_host   = forwarded_host
       var.upstream_x_forwarded_port   = forwarded_port
+      var.upstream_x_forwarded_path   = forwarded_path
       var.upstream_x_forwarded_prefix = forwarded_prefix
 
       -- At this point, the router and `balancer_setup_stage1` have been
@@ -1266,6 +1288,20 @@ return {
 
         if service.protocol == "grpcs" then
           return ngx.exec("@grpcs")
+        end
+
+        if http_version == 1.1 then
+          if route.request_buffering == false then
+            if route.response_buffering == false then
+              return ngx.exec("@unbuffered")
+            end
+
+            return ngx.exec("@unbuffered_request")
+          end
+
+          if route.response_buffering == false then
+            return ngx.exec("@unbuffered_response")
+          end
         end
       end
     end,
@@ -1298,18 +1334,30 @@ return {
       do
         -- set the upstream host header if not `preserve_host`
         local upstream_host = var.upstream_host
+        local upstream_scheme = var.upstream_scheme
 
         if not upstream_host or upstream_host == "" then
           upstream_host = balancer_data.hostname
 
-          local upstream_scheme = var.upstream_scheme
           if upstream_scheme == "http"  and balancer_data.port ~= 80 or
-             upstream_scheme == "https" and balancer_data.port ~= 443
+             upstream_scheme == "https" and balancer_data.port ~= 443 or
+             upstream_scheme == "grpc"  and balancer_data.port ~= 80 or
+             upstream_scheme == "grpcs" and balancer_data.port ~= 443
           then
             upstream_host = upstream_host .. ":" .. balancer_data.port
           end
 
           var.upstream_host = upstream_host
+        end
+
+        -- the nginx grpc module does not offer a way to overrride
+        -- the :authority pseudo-header; use our internal API to
+        -- do so
+        if upstream_scheme == "grpc" or upstream_scheme == "grpcs" then
+          ok, err = kong.service.request.set_header(":authority", upstream_host)
+          if not ok then
+            log(ERR, "failed to set :authority header: ", err)
+          end
         end
       end
 
@@ -1352,6 +1400,10 @@ return {
         clear_header("Proxy-Authorization")
       end
     end
+  },
+  response = {
+    before = NOOP,
+    after = NOOP,
   },
   header_filter = {
     before = function(ctx)
@@ -1402,34 +1454,41 @@ return {
     end,
     after = function(ctx)
       local enabled_headers = kong.configuration.enabled_headers
+      local headers = constants.HEADERS
       if ctx.KONG_PROXIED then
-        if enabled_headers[constants.HEADERS.UPSTREAM_LATENCY] then
-          header[constants.HEADERS.UPSTREAM_LATENCY] = ctx.KONG_WAITING_TIME
+        if enabled_headers[headers.UPSTREAM_LATENCY] then
+          header[headers.UPSTREAM_LATENCY] = ctx.KONG_WAITING_TIME
         end
 
-        if enabled_headers[constants.HEADERS.PROXY_LATENCY] then
-          header[constants.HEADERS.PROXY_LATENCY] = ctx.KONG_PROXY_LATENCY
+        if enabled_headers[headers.PROXY_LATENCY] then
+          header[headers.PROXY_LATENCY] = ctx.KONG_PROXY_LATENCY
         end
 
-        if enabled_headers[constants.HEADERS.VIA] then
-          header[constants.HEADERS.VIA] = server_header
+        if enabled_headers[headers.VIA] then
+          header[headers.VIA] = server_header
         end
 
       else
-        if enabled_headers[constants.HEADERS.RESPONSE_LATENCY] then
-          header[constants.HEADERS.RESPONSE_LATENCY] = ctx.KONG_RESPONSE_LATENCY
+        if enabled_headers[headers.RESPONSE_LATENCY] then
+          header[headers.RESPONSE_LATENCY] = ctx.KONG_RESPONSE_LATENCY
         end
 
-        if enabled_headers[constants.HEADERS.SERVER] then
-          header[constants.HEADERS.SERVER] = server_header
+        -- Some plugins short-circuit the request with Via-header, and in those cases
+        -- we don't want to set the Server-header, if the Via-header matches with
+        -- the Kong server header.
+        if not (enabled_headers[headers.VIA] and header[headers.VIA] == server_header) then
+          if enabled_headers[headers.SERVER] then
+            header[headers.SERVER] = server_header
 
-        else
-          header[constants.HEADERS.SERVER] = nil
+          else
+            header[headers.SERVER] = nil
+          end
         end
       end
     end
   },
   log = {
+    before = NOOP,
     after = function(ctx)
       update_lua_mem()
 

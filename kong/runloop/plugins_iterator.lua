@@ -98,7 +98,8 @@ local function load_configuration(ctx,
                                           load_plugin_from_db,
                                           key)
   if err then
-    ctx.delay_response = false
+    ctx.delay_response = nil
+    ctx.buffered_proxying = nil
     ngx.log(ngx.ERR, tostring(err))
     return ngx.exit(ngx.ERROR)
   end
@@ -131,13 +132,13 @@ local function load_configuration_through_combos(ctx, combos, plugin)
   local service  = ctx.service
   local consumer = ctx.authenticated_consumer
 
-  if route and plugin.no_route then
+  if route and plugin.handler.no_route then
     route = nil
   end
-  if service and plugin.no_service then
+  if service and plugin.handler.no_service then
     service = nil
   end
-  if consumer and plugin.no_consumer then
+  if consumer and plugin.handler.no_consumer then
     consumer = nil
   end
 
@@ -287,6 +288,9 @@ local function get_next(self)
       local cfg = load_configuration_through_combos(ctx, combos, plugin)
       if cfg then
         plugins[name] = cfg
+        if plugin.handler.response and plugin.handler.response ~= BasePlugin.response then
+          ctx.buffered_proxying = true
+        end
       end
     end
   end
@@ -354,6 +358,7 @@ local function new_ws_data()
       certificate   = {},
       rewrite       = {},
       access        = {},
+      response      = {},
       header_filter = {},
       body_filter   = {},
       log           = {},
@@ -514,7 +519,8 @@ function PluginsIterator.new(version)
         if phase_name == "init_worker" or data.combos[plugin.name] then
           local phase_handler = plugin.handler[phase_name]
           if type(phase_handler) == "function"
-          and phase_handler ~= BasePlugin[phase_name] then
+            and phase_handler ~= BasePlugin[phase_name]
+          then
             phase[plugin.name] = true
           end
         end
