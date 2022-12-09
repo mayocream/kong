@@ -122,7 +122,7 @@ jobs:
     - name: Comment on commit
       continue-on-error: true
       # peter-evans/commit-comment@v2
-      uses: peter-evans/commit-comment@a9352b8603f5dfe736429a2fd438c09ed567dc83
+      uses: peter-evans/commit-comment@9876735f62d7e8ec428733ee9181e8e253816371
       with:
         token: ${{ secrets.GHA_COMMENT_TOKEN }}
         body: |
@@ -217,7 +217,7 @@ jobs:
     - name: Comment on commit
       if: github.event_name == 'push'
       # peter-evans/commit-comment@v2
-      uses: peter-evans/commit-comment@a9352b8603f5dfe736429a2fd438c09ed567dc83
+      uses: peter-evans/commit-comment@9876735f62d7e8ec428733ee9181e8e253816371
       with:
         token: ${{ secrets.GHA_COMMENT_TOKEN }}
         body: |
