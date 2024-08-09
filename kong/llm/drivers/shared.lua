@@ -79,6 +79,7 @@ _M.upstream_url_format = {
   gemini        = "https://generativelanguage.googleapis.com",
   gemini_vertex = "https://%s",
   bedrock       = "https://bedrock-runtime.%s.amazonaws.com",
+  mistral       = "https://api.mistral.ai:443"
 }
 
 _M.operation_map = {
@@ -612,12 +613,12 @@ function _M.post_request(conf, response_object)
   if kong.ctx.plugin[start_time_key] then
     local llm_latency = math.floor((ngx.now() - kong.ctx.plugin[start_time_key]) * 1000)
     request_analytics_plugin[log_entry_keys.META_CONTAINER][log_entry_keys.LLM_LATENCY] = llm_latency
-    kong.ctx.shared.ai_request_latency = llm_latency
+    llm_state.set_metrics("e2e_latency", llm_latency)
 
     if response_object.usage and response_object.usage.completion_tokens then
       local time_per_token = math.floor(llm_latency / response_object.usage.completion_tokens)
       request_analytics_plugin[log_entry_keys.USAGE_CONTAINER][log_entry_keys.TIME_PER_TOKEN] = time_per_token
-      kong.ctx.shared.ai_request_time_per_token = time_per_token
+      llm_state.set_metrics("tpot_latency", time_per_token)
     end
   end
 
